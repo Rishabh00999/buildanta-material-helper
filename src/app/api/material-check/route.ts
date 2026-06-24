@@ -3,7 +3,7 @@ import Groq from "groq-sdk";
 
 function getClient() {
   const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error("MISSING_API_KEY");
+  if (!apiKey) throw new Error("MISSING_API_KEY"); 
   return new Groq({ apiKey });
 }
 
