@@ -1,129 +1,201 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useEffect } from "react";
+import axios, { AxiosError } from "axios";
+import { z } from "zod";
 
-type Status = "idle" | "loading" | "success" | "error" | "empty";
+// ── Zod schemas ────────────────────────────────────────────────────────────────
+const InputSchema = z.object({
+  material: z
+    .string()
+    .min(1, `Type a material first — e.g. "TMT bar" or "tiles".`)
+    .max(80, `Keep it short — try just "cement" or "tiles".`),
+});
+
+const ResponseSchema = z.object({
+  result: z.string().min(1),
+});
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+type Status = "idle" | "loading" | "success" | "error";
+
+// ── Parse numbered list from AI response ──────────────────────────────────────
+function parseChecklist(text: string): string[] {
+  return text
+    .split(/\n/)
+    .map((l) => l.replace(/^\d+\.\s*/, "").trim())
+    .filter(Boolean);
+}
 
 export default function Home() {
   const [material, setMaterial] = useState("");
   const [status, setStatus] = useState<Status>("idle");
-  const [result, setResult] = useState("");
+  const [checklist, setChecklist] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState("");
+  const [submittedMaterial, setSubmittedMaterial] = useState("");
+  const [visible, setVisible] = useState(false);
+
+  // Fade-in on mount
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(true), 60);
+    return () => clearTimeout(t);
+  }, []);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (status === "loading") return;
 
-    const trimmed = material.trim();
-
-    // Empty input case
-    if (!trimmed) {
-      setStatus("empty");
-      setResult("");
-      setErrorMessage("");
+    // Client-side Zod validation
+    const parsed = InputSchema.safeParse({ material: material.trim() });
+    if (!parsed.success) {
+      setStatus("error");
+      setErrorMessage(parsed.error.issues[0].message);
       return;
     }
 
     setStatus("loading");
-    setResult("");
+    setChecklist([]);
     setErrorMessage("");
+    setSubmittedMaterial(material.trim());
 
     try {
-      const res = await fetch("/api/material-check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ material: trimmed }),
+      const { data } = await axios.post("/api/material-check", {
+        material: material.trim(),
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        // API failure case
-        setStatus("error");
-        setErrorMessage(data.error || "Something went wrong. Please try again.");
-        return;
+      const validated = ResponseSchema.safeParse(data);
+      if (!validated.success) {
+        throw new Error("Unexpected response shape from server.");
       }
 
+      setChecklist(parseChecklist(validated.data.result));
       setStatus("success");
-      setResult(data.result);
-    } catch {
-      // Network failure / fetch threw (server unreachable, etc.)
+    } catch (err) {
+      const axiosErr = err as AxiosError<{ error?: string }>;
+      const msg =
+        axiosErr.response?.data?.error ||
+        (err instanceof Error ? err.message : null) ||
+        "Couldn't reach the server. Check your connection.";
       setStatus("error");
-      setErrorMessage("Couldn't reach the server. Check your connection and try again.");
+      setErrorMessage(msg);
     }
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <main className="mx-auto flex max-w-xl flex-col gap-8 px-4 py-16">
-        <header className="space-y-2">
-          <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
-            Buildanta
-          </p>
-          <h1 className="text-3xl font-bold tracking-tight">
-            Material Helper
-          </h1>
-          <p className="text-gray-600">
-            Type a construction material, and get 3 things a first-time
-            homeowner in Kanpur should check before buying it.
-          </p>
-        </header>
+    <>
+      <div className="texture-strip" />
 
-        <form onSubmit={handleSubmit} className="flex flex-col gap-3 sm:flex-row">
-          <input
-            type="text"
-            value={material}
-            onChange={(e) => setMaterial(e.target.value)}
-            placeholder="e.g. TMT bar, cement, tiles"
-            className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-3 text-base outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-            disabled={status === "loading"}
-          />
-          <button
-            type="submit"
-            disabled={status === "loading"}
-            className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {status === "loading" ? "Checking…" : "Submit"}
-          </button>
-        </form>
+      <div className={`page ${visible ? "visible" : ""}`}>
+        <div className="shell">
 
-        {/* Empty input case */}
-        {status === "empty" && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
-            Please type a material first — try something like &ldquo;cement&rdquo; or &ldquo;tiles&rdquo;.
-          </div>
-        )}
-
-        {/* API failure case */}
-        {status === "error" && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800">
-            {errorMessage}
-          </div>
-        )}
-
-        {/* Loading state */}
-        {status === "loading" && (
-          <div className="flex items-center gap-2 text-gray-500">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-            Asking the AI about &ldquo;{material.trim()}&rdquo;…
-          </div>
-        )}
-
-        {/* Success — response display */}
-        {status === "success" && result && (
-          <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 font-semibold text-gray-900">
-              Before buying {material.trim()}, check:
-            </h2>
-            <div className="whitespace-pre-line text-gray-700 leading-relaxed">
-              {result}
+          {/* Header */}
+          <header className="header">
+            <div className="logo-mark">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <rect x="2" y="10" width="6" height="8" rx="1" fill="white" fillOpacity="0.9" />
+                <rect x="10" y="6" width="8" height="12" rx="1" fill="white" />
+                <rect x="4" y="4" width="4" height="4" rx="0.5" fill="white" fillOpacity="0.6" />
+              </svg>
             </div>
-          </div>
-        )}
+            <span className="logo-text">Buildanta</span>
+          </header>
 
-        <footer className="pt-8 text-sm text-gray-400">
-          Buildanta Private Limited · Kanpur, UP
-        </footer>
-      </main>
-    </div>
+          {/* Main */}
+          <main>
+            <div className="hero">
+              <p className="hero-eyebrow">Material Helper · Kanpur</p>
+              <h1 className="hero-title">
+                Know before<br />you <em>buy</em>.
+              </h1>
+              <p className="hero-sub">
+                Enter any construction material and get 3 things every
+                first-time homeowner should check before purchasing.
+              </p>
+
+              <form className="form-wrap" onSubmit={handleSubmit} noValidate>
+                <div className="input-wrap">
+                  <span className="input-icon">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8" />
+                      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                    </svg>
+                  </span>
+                  <input
+                    className="input"
+                    type="text"
+                    value={material}
+                    onChange={(e) => setMaterial(e.target.value)}
+                    placeholder="TMT bar, cement, tiles, bricks…"
+                    disabled={status === "loading"}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </div>
+                <button className="btn" type="submit" disabled={status === "loading"}>
+                  {status === "loading" ? (
+                    <><div className="spinner" /> Checking…</>
+                  ) : (
+                    <>Check</>
+                  )}
+                </button>
+              </form>
+            </div>
+
+            {/* Error */}
+            {status === "error" && (
+              <div className="banner-error">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="12" />
+                  <line x1="12" y1="16" x2="12.01" y2="16" />
+                </svg>
+                {errorMessage}
+              </div>
+            )}
+
+            {/* Loading */}
+            {status === "loading" && (
+              <div className="loading-row">
+                <div className="pulse-dot" />
+                <div className="pulse-dot" />
+                <div className="pulse-dot" />
+                <span>Looking up <strong>{submittedMaterial}</strong>…</span>
+              </div>
+            )}
+
+            {/* Results */}
+            {status === "success" && checklist.length > 0 && (
+              <div className="result-card">
+                <div className="result-header">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                  <div>
+                    <div className="result-header-text">Before buying</div>
+                    <div className="result-header-material">{submittedMaterial}</div>
+                  </div>
+                </div>
+                <div className="checklist">
+                  {checklist.map((item, i) => (
+                    <div className="checklist-item" key={i}>
+                      <div className="item-num">{i + 1}</div>
+                      <p className="item-text">{item}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Footer */}
+          <footer className="footer">
+            <span>Buildanta Private Limited</span>
+            <span className="footer-dot" />
+            <span>Kanpur, UP</span>
+          </footer>
+
+        </div>
+      </div>
+    </>
   );
 }
